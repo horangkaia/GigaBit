@@ -1,432 +1,123 @@
-// ==UserScript==
-// @name         AutoPCare - Pro License w/HWID & KeyGen
-// @namespace    http://tampermonkey.net/
-// @version      5.0
-// @description  Auto Refresh & Sync + License Key (1/6/12 bulan) + HWID lock + Key Generator + nicer UI + expiry notifications
-// @match        http://202.150.130.178/sikda_3.0/transaksi/pendaftaran/cek_pendafataran_pcare*
-// @grant        GM_addStyle
-// ==/UserScript==
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>AutoPCare Key Generator Admin</title>
 
-(async function () {
-    'use strict';
-
-    /**************************************************************************
-     * CONFIG - Ganti sebelum publish
-     **************************************************************************/
-    const OWNER_PASS = "ChangeThisOwnerPassword"; // ganti ini sebelum publish
-    const SIGN_SECRET = "ChangeThisVerySecretKey"; // rahasia untuk tanda tangan HMAC (ganti)
-    const STORAGE_KEY = "AutoPCareLicenseV5";
-    const ALERT_BEFORE_DAYS = 3; // notifikasi bila sisa <= ini hari
-
-    /**************************************************************************
-     * CRYPTO HELPERS
-     **************************************************************************/
-    async function sha256Hex(str) {
-        const buf = new TextEncoder().encode(str);
-        const hash = await crypto.subtle.digest("SHA-256", buf);
-        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+<style>
+    body {
+        background: #0e0e0e; 
+        color: #fff; 
+        font-family: Arial; 
+        padding: 40px;
     }
-
-    async function importHMACKey(secret) {
-        const key = await crypto.subtle.importKey(
-            "raw",
-            new TextEncoder().encode(secret),
-            { name: "HMAC", hash: "SHA-256" },
-            false,
-            ["sign", "verify"]
-        );
-        return key;
+    .box {
+        background: rgba(255,255,255,0.07);
+        padding: 20px;
+        border-radius: 12px;
+        width: 420px;
+        margin: auto;
+        box-shadow: 0 0 20px rgba(0,0,0,0.4);
     }
-
-    async function hmacHex(secret, msg) {
-        const key = await importHMACKey(secret);
-        const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
-        return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2,'0')).join('');
+    input, select, button {
+        width: 100%;
+        padding: 12px;
+        margin-top: 10px;
+        border-radius: 8px;
+        border: none;
     }
-
-    function b64Encode(str) { return btoa(unescape(encodeURIComponent(str))); }
-    function b64Decode(b) { return decodeURIComponent(escape(atob(b))); }
-
-    /**************************************************************************
-     * HWID (browser fingerprint)
-     **************************************************************************/
-    async function getHWID() {
-        try {
-            const parts = [
-                navigator.userAgent || "",
-                navigator.platform || "",
-                navigator.language || "",
-                screen.width + "x" + screen.height,
-                screen.colorDepth || "",
-                navigator.hardwareConcurrency || "",
-                Intl.DateTimeFormat().resolvedOptions().timeZone || ""
-            ];
-            const raw = parts.join("||");
-            return await sha256Hex(raw);
-        } catch (e) {
-            return await sha256Hex(navigator.userAgent || "unknown");
-        }
+    button {
+        background: #27ae60;
+        color: #fff;
+        cursor: pointer;
+        font-weight: bold;
     }
+    .danger { background: #c0392b; }
+</style>
 
-    const HWID = await getHWID();
+</head>
+<body>
 
-    /**************************************************************************
-     * LICENSE DATA STRUCTURE
-     *  key format: base64(JSON) + "." + signatureHex
-     *  JSON = {type: "single"|"global", hwid: "<hwid or *>", days: 30|180|365, issued: epoch_ms}
-     **************************************************************************/
-    function makeKeyPayload(obj) {
-        return b64Encode(JSON.stringify(obj));
-    }
+<div class="box">
+    <h2>AutoPCare Key Generator</h2>
 
-    async function signPayload(payload) {
-        return await hmacHex(SIGN_SECRET, payload);
-    }
+    <input id="password" placeholder="Owner Password..." type="password">
 
-    async function generateKey(obj) {
-        // owner use only
-        const payload = makeKeyPayload(obj);
-        const sig = await signPayload(payload);
-        return payload + "." + sig;
-    }
+    <label>Tipe License</label>
+    <select id="type">
+        <option value="single">Single (HWID Lock)</option>
+        <option value="global">Global (No HWID Lock)</option>
+    </select>
 
-    async function verifyAndParseKey(key) {
-        try {
-            const [payload, sig] = key.split(".");
-            if (!payload || !sig) return null;
-            const expected = await signPayload(payload);
-            if (expected !== sig) return null;
-            const json = JSON.parse(b64Decode(payload));
-            return json; // {type, hwid, days, issued}
-        } catch (e) {
-            return null;
-        }
-    }
+    <label>Durasi License</label>
+    <select id="days">
+        <option value="30">1 Bulan (30 hari)</option>
+        <option value="180">6 Bulan (180 hari)</option>
+        <option value="365">1 Tahun (365 hari)</option>
+    </select>
 
-    /**************************************************************************
-     * Storage helpers
-     **************************************************************************/
-    function saveLicenseToLocal(keyStr, meta) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
-            license: keyStr,
-            meta
-        }));
-    }
+    <label>HWID (opsional)</label>
+    <input id="hwid" placeholder="Kosong = otomatis">
 
-    function loadLicenseFromLocal() {
-        const j = localStorage.getItem(STORAGE_KEY);
-        if (!j) return null;
-        try { return JSON.parse(j); } catch { return null; }
-    }
+    <button onclick="generateKey()">Generate Key</button>
 
-    function clearLocalLicense() {
-        localStorage.removeItem(STORAGE_KEY);
-    }
+    <div id="output" style="margin-top:20px; white-space: pre-wrap;"></div>
 
-    /**************************************************************************
-     * UI (Glass)
-     **************************************************************************/
-    GM_addStyle(`
-        #glassPanel {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 320px;
-            padding: 16px;
-            border-radius: 14px;
-            backdrop-filter: blur(8px);
-            background: rgba(20,20,20,0.65);
-            border: 1px solid rgba(255,255,255,0.06);
-            box-shadow: 0 6px 24px rgba(0,0,0,0.4);
-            color: #eaeaea;
-            z-index: 99999999;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-        }
-        #glassPanel h3 { margin:0 0 8px 0; font-size:16px; text-align:center; }
-        #glassPanel button { width:100%; padding:8px; margin-top:8px; border-radius:8px; border:none; cursor:pointer; font-weight:600; }
-        #btnStart { background: linear-gradient(90deg,#2ecc71,#27ae60); color:#072; }
-        #btnStop  { background: linear-gradient(90deg,#e74c3c,#c0392b); color:#fff; }
-        #btnOwner { background: linear-gradient(90deg,#3498db,#2980b9); color:#fff; }
-        #glassStatus { margin-top:8px; text-align:center; font-size:12px; opacity:0.9; }
-        #licenseInfo { margin-top:10px; font-size:12px; word-break:break-word; text-align:center; }
-        .inputRow { display:flex; gap:8px; margin-top:8px; }
-        .inputRow input { flex:1; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02); color:#fff; }
-        .small { font-size:11px; opacity:0.85; }
-        #notifyBadge { display:inline-block; padding:4px 8px; border-radius:999px; background: rgba(255,255,255,0.06); margin-top:6px; }
-    `);
+    <button class="danger" onclick="sendWA()">Kirim ke WhatsApp</button>
+</div>
 
-    const panel = document.createElement("div");
-    panel.id = "glassPanel";
-    panel.innerHTML = `
-        <h3>AutoPCare Pro</h3>
-        <div class="inputRow">
-            <input id="inputKey" placeholder="Masukkan atau tempel KEYCODE..." />
-            <button id="btnApplyKey" title="Apply key">Apply</button>
-        </div>
-        <button id="btnStart">START AUTO</button>
-        <button id="btnStop">STOP</button>
-        <button id="btnOwner">Owner: Key Generator</button>
-        <div id="glassStatus">Status: OFF</div>
-        <div id="licenseInfo" class="small"></div>
-    `;
-    document.body.appendChild(panel);
 
-    const el = {
-        inputKey: document.getElementById("inputKey"),
-        btnApplyKey: document.getElementById("btnApplyKey"),
-        btnStart: document.getElementById("btnStart"),
-        btnStop: document.getElementById("btnStop"),
-        btnOwner: document.getElementById("btnOwner"),
-        glassStatus: document.getElementById("glassStatus"),
-        licenseInfo: document.getElementById("licenseInfo")
+<!-- FIREBASE SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js"></script>
+
+<script>
+    // ======================
+    //  Firebase Config
+    // ======================
+    const firebaseConfig = {
+        apiKey: "AIzaSyBk57WWCAV9PbUQBb_bj7mPtl09oNz7WnA",
+        authDomain: "schesakra.firebaseapp.com",
+        databaseURL: "https://schesakra-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "schesakra",
+        storageBucket: "schesakra.firebasestorage.app",
+        messagingSenderId: "672537227977",
+        appId: "1:672537227977:web:88b24f905c86eba7c05318",
+        measurementId: "G-Q7HSM1LK98"
     };
 
-    /**************************************************************************
-     * Apply / Validate Key
-     **************************************************************************/
-    async function applyKeyFromInput() {
-        const raw = el.inputKey.value.trim();
-        if (!raw) { alert("Masukkan KEY terlebih dahulu"); return; }
-        const parsed = await verifyAndParseKey(raw);
-        if (!parsed) { alert("Key tidak valid atau tanda tangan salah"); return; }
+    firebase.initializeApp(firebaseConfig);
+    const functions = firebase.functions();
 
-        // check HWID match if single
-        if (parsed.type === "single" && parsed.hwid !== HWID) {
-            // If issued as "bind:any" allow claiming: if hwid === "*" then we will bind to current HWID on first use
-            if (parsed.hwid === "*") {
-                // bind to current HWID and re-issue a signed key? We can't re-sign without secret unless owner - instead store meta with original key and mark boundHWID
-                const meta = { boundHWID: HWID, days: parsed.days, issued: parsed.issued };
-                saveLicenseToLocal(raw, meta);
-                alert("Key applied and terikat ke komputer ini (HWID).");
-                renderLicenseInfo();
-                return;
-            } else {
-                alert("Key ini bukan untuk komputer ini (HWID mismatch).");
-                return;
-            }
-        }
+    let lastKey = "";
 
-        // Accept key
-        const meta = { hwid: parsed.hwid, days: parsed.days, issued: parsed.issued || Date.now() };
-        saveLicenseToLocal(raw, meta);
-        alert("Key diterima. License aktif: " + parsed.days + " hari");
-        renderLicenseInfo();
+    async function generateKey() {
+        const password = document.getElementById("password").value.trim();
+        const type = document.getElementById("type").value;
+        const days = Number(document.getElementById("days").value);
+        const hwid = document.getElementById("hwid").value.trim() || "*";
+
+        const cf = functions.httpsCallable("generateKey");
+
+        const res = await cf({ password, type, days, hwid });
+
+        lastKey = res.data.key;
+
+        document.getElementById("output").textContent =
+            "=== KEY BERHASIL DIBUAT ===\n\n" +
+            "KEY:\n" + res.data.key + "\n\n" +
+            "PAYLOAD:\n" + JSON.stringify(res.data.payload, null, 2);
     }
 
-    el.btnApplyKey.addEventListener("click", applyKeyFromInput);
+    function sendWA() {
+        if (!lastKey) return alert("Generate key dulu");
 
-    /**************************************************************************
-     * Start/Stop behavior and timers
-     **************************************************************************/
-    let tmrRefresh = null;
-    let tmrSync = null;
-    let tmrExpiryCheck = null;
+        const msg = `Halo, ini KEY AutoPCare Anda:\n\n${lastKey}`;
+        const url = "https://wa.me/62816772145?text=" + encodeURIComponent(msg);
 
-    function refreshNow() { try { btn_refresh(); console.log("REFRESH OK"); } catch(e){ console.log("refresh error",e);} }
-    function syncNow() { try { sinkron_antrian(); console.log("SYNC OK"); } catch(e){ console.log("sync error",e);} }
-
-    function startAutoIfLicensed() {
-        const lic = loadLicenseFromLocal();
-        if (!lic) { alert("Tidak ada license. Masukkan key dulu."); return; }
-
-        // verify again (integrity)
-        verifyAndParseKey(lic.license).then(parsed => {
-            if (!parsed) { alert("License rusak / signature invalid."); clearLocalLicense(); renderLicenseInfo(); return; }
-
-            // determine bound hwid:
-            const stored = lic.meta || {};
-            const boundHWID = stored.boundHWID || parsed.hwid;
-
-            if (parsed.type === "single" && boundHWID && boundHWID !== HWID) {
-                alert("License terikat ke HWID lain. Tidak bisa dijalankan pada perangkat ini.");
-                return;
-            }
-
-            // compute expiry: issued + days
-            const issued = (stored.issued || parsed.issued || Date.now());
-            const expireTs = issued + (parsed.days * 24 * 60 * 60 * 1000);
-            if (Date.now() > expireTs) {
-                alert("License sudah EXPIRED. Hapus dan masukkan key baru.");
-                clearLocalLicense();
-                renderLicenseInfo();
-                return;
-            }
-
-            // start timers
-            clearInterval(tmrRefresh); clearInterval(tmrSync);
-            tmrRefresh = setInterval(refreshNow, 5000);
-            tmrSync = setInterval(syncNow, 8000);
-
-            renderLicenseInfo();
-            el.glassStatus.innerText = "RUNNING • sisa " + Math.ceil((expireTs - Date.now())/(1000*60*60*24)) + " hari";
-        });
+        window.open(url, "_blank");
     }
+</script>
 
-    function stopAuto() {
-        clearInterval(tmrRefresh); clearInterval(tmrSync);
-        el.glassStatus.innerText = "OFF";
-    }
-
-    el.btnStart.addEventListener("click", startAutoIfLicensed);
-    el.btnStop.addEventListener("click", stopAuto);
-
-    /**************************************************************************
-     * Render license info in UI + expiry notifications
-     **************************************************************************/
-    function renderLicenseInfo() {
-        const lic = loadLicenseFromLocal();
-        if (!lic) {
-            el.licenseInfo.innerHTML = "<i>Belum ada license</i>";
-            return;
-        }
-        verifyAndParseKey(lic.license).then(parsed => {
-            if (!parsed) { el.licenseInfo.innerHTML = "<i>License invalid</i>"; return; }
-            const stored = lic.meta || {};
-            const issued = (stored.issued || parsed.issued || Date.now());
-            const expireTs = issued + (parsed.days * 24 * 60 * 60 * 1000);
-            const daysLeft = Math.ceil((expireTs - Date.now())/(1000*60*60*24));
-            let hwidInfo = parsed.type === "global" ? "Global (tidak terikat HWID)" : (stored.boundHWID || parsed.hwid) === "*" ? "Belum terikat" : (stored.boundHWID ? "Tertaut ke perangkat ini" : "Tertaut ke HWID");
-            el.licenseInfo.innerHTML = `
-                <div>ID Tipe: <b>${parsed.type}</b></div>
-                <div>Durasi: <b>${parsed.days} hari</b></div>
-                <div>Issued: <b>${new Date(issued).toLocaleString()}</b></div>
-                <div>Expire: <b>${new Date(expireTs).toLocaleString()}</b></div>
-                <div>Sisa: <b>${daysLeft} hari</b></div>
-                <div class="small">HWID: ${hwidInfo}</div>
-            `;
-        });
-    }
-
-    // expiry monitor: cek tiap 6 jam, tapi juga segera saat load
-    async function expiryMonitor() {
-        const lic = loadLicenseFromLocal();
-        if (!lic) return;
-        const parsed = await verifyAndParseKey(lic.license);
-        if (!parsed) { clearLocalLicense(); renderLicenseInfo(); return; }
-        const issued = (lic.meta && lic.meta.issued) || parsed.issued || Date.now();
-        const expireTs = issued + (parsed.days * 24 * 60 * 60 * 1000);
-        const daysLeft = Math.ceil((expireTs - Date.now())/(1000*60*60*24));
-        if (Date.now() > expireTs) {
-            alert("License EXPIRED. Silakan masukkan key baru.");
-            clearLocalLicense();
-            renderLicenseInfo();
-            stopAuto();
-            return;
-        }
-        if (daysLeft <= ALERT_BEFORE_DAYS) {
-            // notifikasi ringan
-            el.glassStatus.innerText = "RUNNING • Sisa " + daysLeft + " hari (perhatian)";
-            // toast kecil
-            try { showToast("License hampir habis: " + daysLeft + " hari"); } catch {}
-        }
-    }
-
-    function showToast(msg) {
-        const t = document.createElement("div");
-        t.style.position = "fixed";
-        t.style.bottom = "380px";
-        t.style.right = "30px";
-        t.style.padding = "10px 14px";
-        t.style.background = "rgba(0,0,0,0.8)";
-        t.style.color = "#fff";
-        t.style.borderRadius = "10px";
-        t.style.zIndex = 99999999;
-        t.innerText = msg;
-        document.body.appendChild(t);
-        setTimeout(()=> t.remove(), 6000);
-    }
-
-    // start monitor
-    await expiryMonitor();
-    clearInterval(tmrExpiryCheck);
-    tmrExpiryCheck = setInterval(expiryMonitor, 1000 * 60 * 60 * 6); // tiap 6 jam
-
-    renderLicenseInfo();
-
-    /**************************************************************************
-     * OWNER Key Generator UI (terproteksi)
-     **************************************************************************/
-    el.btnOwner.addEventListener("click", async () => {
-        const pass = prompt("Owner password:");
-        if (!pass || pass !== OWNER_PASS) { alert("Password salah."); return; }
-
-        // build modal
-        const modal = document.createElement("div");
-        modal.style.position = "fixed";
-        modal.style.inset = "0";
-        modal.style.background = "rgba(0,0,0,0.55)";
-        modal.style.zIndex = 999999999;
-        modal.style.display = "flex";
-        modal.style.alignItems = "center";
-        modal.style.justifyContent = "center";
-
-        modal.innerHTML = `
-            <div style="width:420px; background:#111; padding:18px; border-radius:12px; color:#eee; font-family:Segoe UI;">
-                <h3 style="margin:0 0 8px 0">Key Generator (Owner)</h3>
-                <div style="font-size:13px; opacity:0.9; margin-bottom:8px">Tentukan tipe, durasi, dan opsi HWID bind.</div>
-
-                <div style="display:flex; gap:8px; margin-bottom:8px;">
-                    <select id="genType" style="flex:1; padding:8px; border-radius:8px; background:#222; color:#fff; border:1px solid #333;">
-                        <option value="single">Single (terikat HWID)</option>
-                        <option value="global">Global (tidak terikat)</option>
-                    </select>
-                    <select id="genDays" style="width:140px; padding:8px; border-radius:8px; background:#222; color:#fff; border:1px solid #333;">
-                        <option value="30">1 bulan (30h)</option>
-                        <option value="180">6 bulan (180h)</option>
-                        <option value="365">1 tahun (365h)</option>
-                    </select>
-                </div>
-
-                <div style="display:flex; gap:8px; margin-bottom:8px;">
-                    <input id="genHWID" style="flex:1; padding:8px; border-radius:8px; background:#222; color:#fff; border:1px solid #333;" placeholder="Masukkan HWID (kosong = pakai current HWID)"/>
-                    <button id="btnFillHWID" style="padding:8px; border-radius:8px; background:#2d7; border:none;">Isi HWID</button>
-                </div>
-
-                <div style="display:flex; gap:8px;">
-                    <button id="btnGen" style="flex:1; padding:10px; border-radius:8px; background:#27ae60; color:#fff; border:none;">Generate Key</button>
-                    <button id="btnClose" style="padding:10px; border-radius:8px; background:#c0392b; color:#fff; border:none;">Tutup</button>
-                </div>
-
-                <div id="genResult" style="margin-top:10px; word-break:break-all; font-size:13px; background:#0b0b0b; padding:8px; border-radius:8px;"></div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        modal.querySelector("#btnFillHWID").addEventListener("click", () => {
-            modal.querySelector("#genHWID").value = HWID;
-        });
-
-        modal.querySelector("#btnClose").addEventListener("click", () => modal.remove());
-
-        modal.querySelector("#btnGen").addEventListener("click", async () => {
-            const type = modal.querySelector("#genType").value;
-            let hwid = modal.querySelector("#genHWID").value.trim();
-            const days = parseInt(modal.querySelector("#genDays").value, 10);
-            if (!hwid) {
-                if (type === "single") hwid = HWID; else hwid = "*";
-            }
-            const obj = { type, hwid, days, issued: Date.now() };
-            const key = await generateKey(obj);
-            modal.querySelector("#genResult").innerText = "KEY:\n" + key + "\n\nPayload:\n" + JSON.stringify(obj, null, 2);
-        });
-    });
-
-    /**************************************************************************
-     * Auto-start if license present and valid? (optional)
-     **************************************************************************/
-    // Uncomment the following to auto-start when script loads and license ok:
-    // startAutoIfLicensed();
-
-    /**************************************************************************
-     * Utility: expose some helpers for debugging in console
-     **************************************************************************/
-    window.AutoPCare = {
-        HWID,
-        generateKey: async (type='single', hwid='*', days=30) => await generateKey({type, hwid, days, issued:Date.now()}),
-        verifyKey: verifyAndParseKey,
-        loadLicenseFromLocal,
-        clearLocalLicense
-    };
-
-})();
+</body>
+</html>
