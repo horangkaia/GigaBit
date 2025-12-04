@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Firebase Cloud Functions Tester</title>
+<style>
+  body { background:#111; color:#eee; font-family:Arial; padding:24px; }
+  .box { background:#1b1b1b; padding:18px; border-radius:10px; margin-bottom:18px; }
+  input,select,button { width:100%; padding:10px; margin-top:8px;
+    border-radius:6px; border:none; }
+  button { background:#27ae60; color:white; font-weight:700; cursor:pointer; }
+  pre { background:#000; padding:12px; border-radius:10px; max-height:300px; overflow:auto; }
+</style>
+</head>
+<body>
+
+<h2>🔥 Firebase Cloud Functions Tester</h2>
+<p><i>Gunakan ini untuk testing endpoint generate, list, verify</i></p>
+
+<hr style="border:0;border-bottom:1px solid #333;margin:20px 0">
+
+<script>
+// ==== GANTI INI SESUAI PROJECT FIREBASEMU ====
+const REGION_URL = "https://schesakra-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
+const API = {
+  generate: REGION_URL + "/generateKey",
+  list: REGION_URL + "/listKeys",
+  verify: REGION_URL + "/verifyKey"
+};
+</script>
+
+
+<!-- ======================== -->
+<!-- 1. TEST GENERATE KEY -->
+<!-- ======================== -->
+<div class="box">
+  <h3>1. Generate Key</h3>
+
+  <label>Owner Password</label>
+  <input id="pw1" placeholder="Admin password">
+
+  <label>Tipe License</label>
+  <select id="type1">
+    <option value="single">single</option>
+    <option value="global">global</option>
+  </select>
+
+  <label>Durasi</label>
+  <select id="days1">
+    <option value="30">30 hari</option>
+    <option value="180">180 hari</option>
+    <option value="365">365 hari</option>
+  </select>
+
+  <label>HWID</label>
+  <input id="hwid1" placeholder="HWID atau *">
+
+  <button onclick="testGenerate()">Generate Key</button>
+  <pre id="out1"></pre>
+</div>
+
+
+<!-- ======================== -->
+<!-- 2. TEST LIST KEYS -->
+<!-- ======================== -->
+<div class="box">
+  <h3>2. List Keys</h3>
+
+  <label>Owner Password</label>
+  <input id="pw2" placeholder="Admin password">
+
+  <button onclick="testList()">List Keys</button>
+  <pre id="out2"></pre>
+</div>
+
+
+<!-- ======================== -->
+<!-- 3. TEST VERIFY KEY -->
+<!-- ======================== -->
+<div class="box">
+  <h3>3. Verify Key</h3>
+
+  <label>Key</label>
+  <input id="vkey" placeholder="KEY-xxxxx">
+
+  <label>HWID</label>
+  <input id="vhwid" placeholder="hardware-id">
+
+  <button onclick="testVerify()">Verify</button>
+  <pre id="out3"></pre>
+</div>
+
+
+<script>
+async function testGenerate() {
+  const pw = pw1.value.trim();
+  const type = type1.value;
+  const days = days1.value;
+  const hwid = hwid1.value.trim() || "*";
+
+  const url = `${API.generate}?pw=${pw}&type=${type}&days=${days}&hwid=${hwid}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  out1.textContent = JSON.stringify(j, null, 2);
+}
+
+async function testList() {
+  const pw = pw2.value.trim();
+  const url = `${API.list}?pw=${pw}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  out2.textContent = JSON.stringify(j, null, 2);
+}
+
+async function testVerify() {
+  const key = vkey.value.trim();
+  const hwid = vhwid.value.trim();
+
+  const url = `${API.verify}?key=${encodeURIComponent(key)}&hwid=${encodeURIComponent(hwid)}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  out3.textContent = JSON.stringify(j, null, 2);
+}
+</script>
+
+</body>
+</html>
