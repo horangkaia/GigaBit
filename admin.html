@@ -2,143 +2,83 @@
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>AutoPCare Admin (Firebase Blaze)</title>
+<title>AutoPCare Offline Admin</title>
 <style>
-  body{background:#0e0e0e;color:#fff;font-family:Arial;padding:24px}
-  .card{background:rgba(255,255,255,0.06);padding:14px;border-radius:10px;width:900px;max-width:95%;margin:auto}
-  input,select,button{padding:10px;border-radius:8px;margin-top:8px;width:100%;box-sizing:border-box}
-  button{background:#27ae60;color:#fff;border:none;font-weight:700;cursor:pointer}
-  .muted{color:#9fb;font-size:13px;margin-top:8px}
-  table{width:100%;border-collapse:collapse;margin-top:12px}
-  th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;vertical-align:top}
-  .danger{background:#c0392b}
-  .btn-inline{ padding:6px 10px; margin:2px; border-radius:6px; background:#3498db; border:none; cursor:pointer; color:#fff }
-  .danger{background:#c0392b}
-  .small{font-size:12px;color:#aaa}
-  .row{display:flex;gap:10px}
+  body{background:#111;color:#fff;font-family:Arial;padding:24px}
+  .card{background:#222;padding:18px;border-radius:10px;width:700px;margin:auto}
+  input,select,button{padding:10px;margin-top:8px;width:100%;border-radius:8px;font-size:14px}
+  button{background:#27ae60;border:none;color:#fff;font-weight:bold;cursor:pointer}
+  pre{background:#000;padding:10px;border-radius:8px;margin-top:12px;white-space:pre-wrap}
 </style>
 </head>
 <body>
-
 <div class="card">
-  <h2>AutoPCare Admin — Firebase Blaze</h2>
+  <h2>AutoPCare — Offline Admin License Generator</h2>
 
-  <input id="pw" type="kalikiben" placeholder="Owner password (required)">
-  <div class="row">
-    <div>
-      <label>Tipe license</label>
-      <select id="type"><option value="single">single</option><option value="global">global</option></select>
-    </div>
-    <div>
-      <label>Durasi</label>
-      <select id="days"><option value="30">30 hari</option><option value="180">180 hari</option><option value="365">365 hari</option></select>
-    </div>
-  </div>
+  <label>Owner Password</label>
+  <input id="pw" type="password" placeholder="Required">
 
-  <label>HWID</label>
-  <input id="hwid" placeholder="*">
+  <label>Tipe License</label>
+  <select id="type">
+    <option value="single">single</option>
+    <option value="global">global</option>
+  </select>
+
+  <label>Durasi (hari)</label>
+  <select id="days">
+    <option value="30">30 hari</option>
+    <option value="180">180 hari</option>
+    <option value="365">365 hari</option>
+    <option value="9999">Lifetime</option>
+  </select>
+
+  <label>HWID (opsional)</label>
+  <input id="hwid" placeholder="Untuk single saja (global -> kosongkan)">
 
   <button id="btnGen">Generate Key</button>
 
-  <pre id="out"></pre>
-  <button id="btnList">List Keys</button>
-
-  <div id="table"></div>
+  <pre id="out">Output akan tampil di sini.</pre>
 </div>
 
 <script>
-const OWNER_PW = "kalikiben"; // wajib sama
-const DB = "https://schesakra-default-rtdb.asia-southeast1.firebasedatabase.app/autopcare_keys";
+// ===============
+// CONFIG
+// ===============
+const OWNER_PASSWORD = "admin123";     // ganti sendiri
+const SECRET_KEY = "MY_SUPER_SECRET";  // ganti sendiri
 
-// simple auth check
-function auth() {
-  const pw = document.getElementById("pw").value.trim();
-  return pw === OWNER_PW;
-}
-
-function randKey() {
-  return "KEY-" + Math.random().toString(36).substring(2).toUpperCase();
+// WebCrypto utility
+async function sha256(message){
+  const data = new TextEncoder().encode(message);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(x=>x.toString(16).padStart(2,"0")).join("");
 }
 
 document.getElementById("btnGen").onclick = async () => {
-  if (!auth()) return alert("Password salah!");
+  const pw = document.getElementById("pw").value.trim();
+  if (pw !== OWNER_PASSWORD) {
+    alert("Password salah!");
+    return;
+  }
 
-  const type = type.value;
-  const days = Number(document.getElementById("days").value);
+  const type = document.getElementById("type").value;
+  const days = parseInt(document.getElementById("days").value);
   const hwid = document.getElementById("hwid").value.trim() || "*";
 
-  const id = Date.now().toString();
-  const key = randKey();
-  
-  const issued = Date.now();
-  const expires = issued + days * 86400000;
+  const expires = Math.floor(Date.now()/1000) + (days * 86400);
 
-  const data = {
-    id, key, type, days, hwid,
-    paid:false, used:false, revoked:false,
-    issued, expires
-  };
+  const msg = `${type}|${hwid}|${expires}|${SECRET_KEY}`;
+  const signature = await sha256(msg);
 
-  await fetch(`${DB}/${id}.json`, {
-    method:"PUT",
-    body:JSON.stringify(data)
-  });
+  const key = `APC|TYPE=${type}|HWID=${hwid}|EXP=${expires}|SIG=${signature}`;
 
-  out.textContent = JSON.stringify(data, null, 2);
+  document.getElementById("out").textContent = key;
+
+  try {
+    await navigator.clipboard.writeText(key);
+  } catch {}
+
 };
-
-document.getElementById("btnList").onclick = async () => {
-  if (!auth()) return alert("Password salah!");
-
-  const res = await fetch(DB + ".json");
-  const list = await res.json();
-
-  if (!list) return (table.innerHTML = "<p>Empty</p>");
-
-  let html = `<table><tr>
-      <th>ID</th><th>KEY</th><th>TYPE</th><th>PAID</th>
-      <th>USED</th><th>REVOKE</th><th>ACTION</th>
-  </tr>`;
-
-  Object.values(list).reverse().forEach(k => {
-    html += `
-    <tr>
-      <td>${k.id}</td>
-      <td>${k.key}</td>
-      <td>${k.type}/${k.days}</td>
-      <td>${k.paid}</td>
-      <td>${k.used}</td>
-      <td>${k.revoked}</td>
-      <td>
-        <button class="btn-inline" onclick="markPaid('${k.id}')">Paid</button>
-        <button class="btn-inline" onclick="markUsed('${k.id}')">Used</button>
-        <button class="btn-inline danger" onclick="revoke('${k.id}')">Revoke</button>
-      </td>
-    </tr>`;
-  });
-
-  html += "</table>";
-  table.innerHTML = html;
-};
-
-async function markPaid(id){
-  if (!auth()) return alert("Pass salah");
-  await fetch(`${DB}/${id}/paid.json`, {method:"PUT",body:true});
-  alert("Marked Paid"); btnList.click();
-}
-
-async function markUsed(id){
-  if (!auth()) return alert("Pass salah");
-  await fetch(`${DB}/${id}/used.json`, {method:"PUT",body:true});
-  alert("Marked Used"); btnList.click();
-}
-
-async function revoke(id){
-  if (!auth()) return alert("Pass salah");
-  await fetch(`${DB}/${id}/revoked.json`, {method:"PUT",body:true});
-  alert("Revoked"); btnList.click();
-}
 </script>
-
 </body>
 </html>
