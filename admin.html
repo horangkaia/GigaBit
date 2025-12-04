@@ -2,18 +2,18 @@
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>AutoPCare Offline Admin</title>
+<title>APC PRO – Compatible License Generator</title>
 <style>
-  body{background:#111;color:#fff;font-family:Arial;padding:24px}
-  .card{background:#222;padding:18px;border-radius:10px;width:700px;margin:auto}
-  input,select,button{padding:10px;margin-top:8px;width:100%;border-radius:8px;font-size:14px}
-  button{background:#27ae60;border:none;color:#fff;font-weight:bold;cursor:pointer}
-  pre{background:#000;padding:10px;border-radius:8px;margin-top:12px;white-space:pre-wrap}
+  body { background:#111; color:#fff; font-family:Arial; padding:24px }
+  .card { background:#222; padding:18px; border-radius:10px; width:700px; margin:auto }
+  input,select,button { padding:10px; margin-top:8px; width:100%; border-radius:8px; font-size:14px }
+  button { background:#27ae60; border:none; color:#fff; font-weight:bold; cursor:pointer }
+  pre { background:#000; padding:10px; border-radius:8px; margin-top:12px; white-space:pre-wrap }
 </style>
 </head>
 <body>
 <div class="card">
-  <h2>AutoPCare — Offline Admin License Generator</h2>
+  <h2>AutoPCare PRO — License Generator (Tampermonkey Format)</h2>
 
   <label>Owner Password</label>
   <input id="pw" type="password" placeholder="Required">
@@ -32,52 +32,51 @@
     <option value="9999">Lifetime</option>
   </select>
 
-  <label>HWID (opsional)</label>
-  <input id="hwid" placeholder="Untuk single saja (global -> kosongkan)">
+  <label>HWID (kosongkan untuk wildcard *)</label>
+  <input id="hwid">
 
-  <button id="btnGen">Generate Key</button>
+  <button id="btnGen">Generate</button>
 
-  <pre id="out">Output akan tampil di sini.</pre>
+  <pre id="out"></pre>
 </div>
 
 <script>
-// ===============
-// CONFIG
-// ===============
-const OWNER_PASSWORD = "Kalikiben1@";     // ganti sendiri
-const SECRET_KEY = "kalikiben";  // ganti sendiri
+const OWNER_PASSWORD = "Kalikiben1@";
+const SECRET_KEY     = "TEST_SECRET_123456"; // HARUS SAMA DENGAN Script Tampermonkey
 
-// WebCrypto utility
-async function sha256(message){
-  const data = new TextEncoder().encode(message);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash)).map(x=>x.toString(16).padStart(2,"0")).join("");
+// HMAC Generator
+async function hmac(secret, str){
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
 
-document.getElementById("btnGen").onclick = async () => {
-  const pw = document.getElementById("pw").value.trim();
-  if (pw !== OWNER_PASSWORD) {
-    alert("Password salah!");
+document.getElementById("btnGen").onclick = async()=>{
+
+  if(document.getElementById("pw").value !== OWNER_PASSWORD){
+    alert("Password salah");
     return;
   }
 
-  const type = document.getElementById("type").value;
-  const days = parseInt(document.getElementById("days").value);
-  const hwid = document.getElementById("hwid").value.trim() || "*";
-
+  const type  = document.getElementById("type").value;
+  const days  = parseInt(document.getElementById("days").value);
+  const hwid  = document.getElementById("hwid").value.trim() || "*";
   const expires = Math.floor(Date.now()/1000) + (days * 86400);
 
-  const msg = `${type}|${hwid}|${expires}|${SECRET_KEY}`;
-  const signature = await sha256(msg);
+  const payload = { type, hwid, expires };
+  const b64 = btoa(JSON.stringify(payload));
 
-  const key = `APC|TYPE=${type}|HWID=${hwid}|EXP=${expires}|SIG=${signature}`;
+  const sig = await hmac(SECRET_KEY, b64);
 
-  document.getElementById("out").textContent = key;
+  const finalKey = `${b64}.${sig}`;
+  document.getElementById("out").textContent = finalKey;
 
-  try {
-    await navigator.clipboard.writeText(key);
-  } catch {}
-
+  try{ navigator.clipboard.writeText(finalKey); }catch{}
 };
 </script>
 </body>
