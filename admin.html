@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>AutoPCare Admin</title>
+<title>AutoPCare Admin (Firebase Blaze)</title>
 <style>
   body{background:#0e0e0e;color:#fff;font-family:Arial;padding:24px}
   .card{background:rgba(255,255,255,0.06);padding:14px;border-radius:10px;width:900px;max-width:95%;margin:auto}
@@ -12,22 +12,18 @@
   table{width:100%;border-collapse:collapse;margin-top:12px}
   th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;vertical-align:top}
   .danger{background:#c0392b}
-  .row { display:flex; gap:8px; }
-  .row > * { flex:1; }
-  .small { font-size:13px; color:#9fb; margin-top:6px; }
-  .key-cell { word-break:break-all; max-width:280px; }
-  .btn-inline { display:inline-block; padding:6px 8px; margin:2px; border-radius:6px; cursor:pointer; background:#3498db; color:#fff; border:none; font-weight:600 }
-  .btn-danger { background:#c0392b; color:#fff }
-  pre { background: rgba(255,255,255,0.02); padding:8px; border-radius:8px; overflow:auto; max-height:220px }
-  #status { margin-top:10px; font-size:13px }
+  .btn-inline{ padding:6px 10px; margin:2px; border-radius:6px; background:#3498db; border:none; cursor:pointer; color:#fff }
+  .danger{background:#c0392b}
+  .small{font-size:12px;color:#aaa}
+  .row{display:flex;gap:10px}
 </style>
 </head>
 <body>
+
 <div class="card">
-  <h2>AutoPCare — Admin</h2>
+  <h2>AutoPCare Admin — Firebase Blaze</h2>
 
   <input id="pw" type="password" placeholder="Owner password (required)">
-
   <div class="row">
     <div>
       <label>Tipe license</label>
@@ -39,239 +35,110 @@
     </div>
   </div>
 
-  <label>HWID (opsional)</label>
-  <input id="hwid" placeholder="Isi untuk single (atau kosong -> *)">
+  <label>HWID</label>
+  <input id="hwid" placeholder="*">
 
-  <div class="row">
-    <button id="btnGen">Generate Key</button>
-    <button id="btnCopyAll">Copy Latest Key</button>
-  </div>
+  <button id="btnGen">Generate Key</button>
 
-  <pre id="out" style="white-space:pre-wrap;margin-top:10px">Output akan muncul di sini.</pre>
+  <pre id="out"></pre>
+  <button id="btnList">List Keys</button>
 
-  <hr style="opacity:0.06;margin-top:12px"/>
-
-  <div style="display:flex;gap:8px">
-    <button id="btnList" style="flex:1">List Keys</button>
-    <button id="btnRefresh" style="flex:1">Refresh</button>
-    <button id="btnAuto" style="flex:1">Auto Refresh: OFF</button>
-  </div>
-
-  <div id="tableWrap" style="margin-top:12px"></div>
-  <div id="status" class="muted">Semua permintaan admin dikirim ke Cloud Function yang aman (server-side checks).</div>
+  <div id="table"></div>
 </div>
 
 <script>
-/*
-  Admin HTML (fixed / robust)
-  - Ganti REGION_URL sesuai fungsi cloud Anda
-  - Menggunakan simple fetch GET untuk endpoints onRequest
-*/
-const REGION_URL = "https://asia-southeast2-schesakra.cloudfunctions.net"; // ganti sesuai region/project
-const ENDPOINTS = {
-  generate: REGION_URL + "/generateKey",
-  list: REGION_URL + "/listKeys",
-  markPaid: REGION_URL + "/markPaid",
-  markUsed: REGION_URL + "/markUsed",
-  revoke: REGION_URL + "/revokeKey",
-  verify: REGION_URL + "/verifyKey"
+const OWNER_PW = "kalikiben"; // wajib sama
+const DB = "https://schesakra-default-rtdb.asia-southeast1.firebasedatabase.app/autopcare_keys";
+
+// simple auth check
+function auth() {
+  const pw = document.getElementById("pw").value.trim();
+  return pw === OWNER_PW;
+}
+
+function randKey() {
+  return "KEY-" + Math.random().toString(36).substring(2).toUpperCase();
+}
+
+document.getElementById("btnGen").onclick = async () => {
+  if (!auth()) return alert("Password salah!");
+
+  const type = type.value;
+  const days = Number(document.getElementById("days").value);
+  const hwid = document.getElementById("hwid").value.trim() || "*";
+
+  const id = Date.now().toString();
+  const key = randKey();
+  
+  const issued = Date.now();
+  const expires = issued + days * 86400000;
+
+  const data = {
+    id, key, type, days, hwid,
+    paid:false, used:false, revoked:false,
+    issued, expires
+  };
+
+  await fetch(`${DB}/${id}.json`, {
+    method:"PUT",
+    body:JSON.stringify(data)
+  });
+
+  out.textContent = JSON.stringify(data, null, 2);
 };
 
-const $ = id => document.getElementById(id);
-let lastGeneratedKey = "";
-let autoRefreshTimer = null;
+document.getElementById("btnList").onclick = async () => {
+  if (!auth()) return alert("Password salah!");
 
-function setBusy(el, busy=true) {
-  el.disabled = busy;
-  if (busy) el.dataset.orig = el.innerText;
-  else if (el.dataset.orig) { el.innerText = el.dataset.orig; delete el.dataset.orig; }
-}
+  const res = await fetch(DB + ".json");
+  const list = await res.json();
 
-async function safeFetchJson(url, opts) {
-  try {
-    const res = await fetch(url, opts);
-    const text = await res.text();
-    // try parse JSON, otherwise return text
-    try { return { ok:true, status: res.status, json: JSON.parse(text) }; }
-    catch { return { ok:true, status: res.status, text }; }
-  } catch (e) {
-    return { ok:false, error: e.message || String(e) };
-  }
-}
+  if (!list) return (table.innerHTML = "<p>Empty</p>");
 
-$('btnGen').addEventListener('click', async () => {
-  const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
-  const type = $('type').value;
-  const days = $('days').value;
-  const hwid = $('hwid').value.trim() || '*';
+  let html = `<table><tr>
+      <th>ID</th><th>KEY</th><th>TYPE</th><th>PAID</th>
+      <th>USED</th><th>REVOKE</th><th>ACTION</th>
+  </tr>`;
 
-  const url = `${ENDPOINTS.generate}?pw=${encodeURIComponent(pw)}&type=${encodeURIComponent(type)}&days=${encodeURIComponent(days)}&hwid=${encodeURIComponent(hwid)}`;
-
-  setBusy($('btnGen'), true);
-  $('out').textContent = "Membuat key...";
-
-  const r = await safeFetchJson(url);
-  setBusy($('btnGen'), false);
-
-  if (!r.ok) { $('out').textContent = "Network error: " + r.error; return; }
-  if (r.status >= 400) {
-    $('out').textContent = `Server error (${r.status}): ${JSON.stringify(r.json || r.text)}`;
-    return;
-  }
-  const j = r.json || r.text;
-  $('out').textContent = JSON.stringify(j, null, 2);
-  if (j && j.key) {
-    lastGeneratedKey = j.key;
-    try { await navigator.clipboard.writeText(j.key); $('out').textContent += "\n\n(KEY copied to clipboard)"; } catch(e){}
-  } else if (j && j.error) {
-    $('out').textContent = "Error: " + j.error;
-  }
-});
-
-$('btnCopyAll').addEventListener('click', async ()=>{
-  if (!lastGeneratedKey) return alert("Belum ada key yang di-generate di sesi ini.");
-  try {
-    await navigator.clipboard.writeText(lastGeneratedKey);
-    alert("Key terakhir disalin ke clipboard.");
-  } catch(e) {
-    alert("Gagal salin: " + (e.message||e));
-  }
-});
-
-$('btnList').addEventListener('click', listKeys);
-$('btnRefresh').addEventListener('click', listKeys);
-
-$('btnAuto').addEventListener('click', ()=>{
-  if (autoRefreshTimer) {
-    clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-    $('btnAuto').innerText = "Auto Refresh: OFF";
-    showStatus("Auto refresh dimatikan.");
-  } else {
-    autoRefreshTimer = setInterval(listKeys, 30000); // setiap 30s
-    $('btnAuto').innerText = "Auto Refresh: ON";
-    showStatus("Auto refresh diaktifkan (30s).");
-    listKeys();
-  }
-});
-
-function showStatus(msg) {
-  $('status').innerText = msg;
-}
-
-async function listKeys(){
-  const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password untuk list');
-  const url = `${ENDPOINTS.list}?pw=${encodeURIComponent(pw)}`;
-  setBusy($('btnList'), true);
-  $('out').textContent = "Memuat daftar key...";
-  const r = await safeFetchJson(url);
-  setBusy($('btnList'), false);
-  if (!r.ok) { $('out').textContent = "Network error: " + r.error; return; }
-  if (r.status >= 400) {
-    $('out').textContent = `Server error (${r.status}): ${JSON.stringify(r.json || r.text)}`;
-    return;
-  }
-  const j = r.json || r.text;
-  if (!j.ok) {
-    $('out').textContent = JSON.stringify(j, null, 2);
-    return;
-  }
-  const keys = j.keys || {};
-  if (Object.keys(keys).length === 0) {
-    $('tableWrap').innerHTML = "<div class='small'>Belum ada key di database.</div>";
-    $('out').textContent = "Kosong";
-    return;
-  }
-
-  const rows = Object.keys(keys).reverse().map(id => {
-    const k = keys[id] || {};
-    const keyText = k.key || "";
-    const shortKey = keyText.length > 60 ? keyText.slice(0,60) + "..." : keyText;
-    const issued = k.issued ? new Date(k.issued).toLocaleString() : "";
-    const expires = k.expires ? new Date(k.expires).toLocaleString() : "";
-    return `<tr>
-      <td style="word-break:break-all"><b>${id}</b><div class="small">${issued} → ${expires}</div></td>
-      <td class="key-cell">${shortKey}<div style="margin-top:6px">
-        <button class="btn-inline" data-key="${encodeURIComponent(keyText)}" onclick="copyKey(this)">Copy</button>
-        <button class="btn-inline" data-key="${encodeURIComponent(keyText)}" onclick="openWA(this)">WA</button>
-        <button class="btn-inline" data-key="${encodeURIComponent(keyText)}" onclick="showFullKey(this)">Show</button>
-      </div></td>
-      <td>${k.type||''}/${k.days||''}</td>
-      <td>${k.paid?'<b style="color:#6fb">PAID</b>':'<b style="color:#fb6">UNPAID</b>'}</td>
-      <td>${k.used?'<span style="color:#6fb">USED</span>':'-'}</td>
-      <td>${k.revoked?'<span style="color:#f66">REVOKED</span>':'-'}</td>
+  Object.values(list).reverse().forEach(k => {
+    html += `
+    <tr>
+      <td>${k.id}</td>
+      <td>${k.key}</td>
+      <td>${k.type}/${k.days}</td>
+      <td>${k.paid}</td>
+      <td>${k.used}</td>
+      <td>${k.revoked}</td>
       <td>
-        <button data-id="${id}" class="btn-inline btnMarkPaid">Mark Paid</button>
-        <button data-id="${id}" class="btn-inline btnMarkUsed">Mark Used</button>
-        <button data-id="${id}" class="btn-inline btnRevoke btn-danger">Revoke</button>
+        <button class="btn-inline" onclick="markPaid('${k.id}')">Paid</button>
+        <button class="btn-inline" onclick="markUsed('${k.id}')">Used</button>
+        <button class="btn-inline danger" onclick="revoke('${k.id}')">Revoke</button>
       </td>
     </tr>`;
-  }).join('');
+  });
 
-  $('tableWrap').innerHTML = `<table><thead><tr><th style="width:12%">ID</th><th style="width:42%">KEY</th><th>TYPE/DAYS</th><th>PAID</th><th>USED</th><th>REVOKED</th><th>ACTION</th></tr></thead><tbody>${rows}</tbody></table>`;
-  bindActionButtons();
-  $('out').textContent = `Menampilkan ${Object.keys(keys).length} key.`;
+  html += "</table>";
+  table.innerHTML = html;
+};
+
+async function markPaid(id){
+  if (!auth()) return alert("Pass salah");
+  await fetch(`${DB}/${id}/paid.json`, {method:"PUT",body:true});
+  alert("Marked Paid"); btnList.click();
 }
 
-// Helper functions used inline from template buttons
-window.copyKey = async function(btn){
-  const encoded = btn.getAttribute('data-key') || '';
-  const key = decodeURIComponent(encoded);
-  try { await navigator.clipboard.writeText(key); alert("Key disalin ke clipboard."); } catch(e){ alert("Gagal salin: "+e.message); }
-};
-window.openWA = function(btn){
-  const encoded = btn.getAttribute('data-key') || '';
-  const key = decodeURIComponent(encoded);
-  const msg = `Halo, ini KEY AutoPCare Anda:%0A%0A${encodeURIComponent(key)}`;
-  // ubah nomor tujuan jika perlu
-  const phone = "62816772145";
-  window.open(`https://wa.me/${phone}?text=${msg}`, '_blank');
-};
-window.showFullKey = function(btn){
-  const encoded = btn.getAttribute('data-key') || '';
-  const key = decodeURIComponent(encoded);
-  alert("Full Key:\n\n" + key);
-};
-
-function bindActionButtons(){
-  document.querySelectorAll('.btnMarkPaid').forEach(b => b.addEventListener('click', async e => {
-    const id = e.currentTarget.dataset.id; if(!confirm('Mark paid?')) return;
-    const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
-    const url = `${ENDPOINTS.markPaid}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
-    setBusy(e.currentTarget, true);
-    const r = await safeFetchJson(url);
-    setBusy(e.currentTarget, false);
-    if (!r.ok) return alert("Network error: "+r.error);
-    alert(JSON.stringify(r.json || r.text, null, 2));
-    listKeys();
-  }));
-  document.querySelectorAll('.btnMarkUsed').forEach(b => b.addEventListener('click', async e => {
-    const id = e.currentTarget.dataset.id; if(!confirm('Mark used?')) return;
-    const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
-    const url = `${ENDPOINTS.markUsed}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
-    setBusy(e.currentTarget, true);
-    const r = await safeFetchJson(url);
-    setBusy(e.currentTarget, false);
-    if (!r.ok) return alert("Network error: "+r.error);
-    alert(JSON.stringify(r.json || r.text, null, 2));
-    listKeys();
-  }));
-  document.querySelectorAll('.btnRevoke').forEach(b => b.addEventListener('click', async e => {
-    const id = e.currentTarget.dataset.id; if(!confirm('Revoke key?')) return;
-    const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
-    const url = `${ENDPOINTS.revoke}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
-    setBusy(e.currentTarget, true);
-    const r = await safeFetchJson(url);
-    setBusy(e.currentTarget, false);
-    if (!r.ok) return alert("Network error: "+r.error);
-    alert(JSON.stringify(r.json || r.text, null, 2));
-    listKeys();
-  }));
+async function markUsed(id){
+  if (!auth()) return alert("Pass salah");
+  await fetch(`${DB}/${id}/used.json`, {method:"PUT",body:true});
+  alert("Marked Used"); btnList.click();
 }
 
-// initial small hint
-$('out').textContent = "Siap. Masukkan password lalu klik Generate Key atau List Keys.";
-
+async function revoke(id){
+  if (!auth()) return alert("Pass salah");
+  await fetch(`${DB}/${id}/revoked.json`, {method:"PUT",body:true});
+  alert("Revoked"); btnList.click();
+}
 </script>
+
 </body>
 </html>
