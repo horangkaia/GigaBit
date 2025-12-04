@@ -1,210 +1,146 @@
-// functions/index.js
-const crypto = require("crypto");
-const { onRequest } = require("firebase-functions/v2/https");
-const { initializeApp } = require("firebase-admin/app");
-const { getDatabase } = require("firebase-admin/database");
+const functions = require("firebase-functions");
+const admin = require("firebase-admin");
+const cors = require("cors")({ origin: true });
 
-initializeApp();
+admin.initializeApp();
+const db = admin.database();
 
-// ========= CONFIG =========
-const SIGN_SECRET = process.env.SIGN_SECRET || "DEV_SECRET_CHANGE";
-const OWNER_PASS  = process.env.OWNER_PASS  || "DEV_OWNER_PASS";
-// ==========================
+const OWNER_PW = "kalikiben"; // GANTI WAJIB
 
-// --- util base64url ---
-function base64urlEncode(str) {
-  return Buffer.from(str, "utf8")
-    .toString("base64")
-    .replace(/=/g,"")
-    .replace(/\+/g,'-')
-    .replace(/\//g,'_');
-}
-function base64urlDecode(b64) {
-  b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
-  while (b64.length % 4) b64 += '=';
-  return Buffer.from(b64, 'base64').toString('utf8');
+function checkPw(req, res) {
+  if (!req.query.pw || req.query.pw !== OWNER_PW) {
+    res.json({ ok: false, error: "Wrong admin password" });
+    return false;
+  }
+  return true;
 }
 
-function signPayload(payloadB64) {
-  return crypto.createHmac("sha256", SIGN_SECRET)
-               .update(payloadB64)
-               .digest("hex");
-}
+// ===================================================
+// 1. GENERATE KEY
+// ===================================================
+exports.generateKey = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
 
-async function findRecordByKey(db, fullKey) {
-  const snap = await db.ref("keys").orderByChild("key").equalTo(fullKey).limitToFirst(1).get();
-  if (!snap.exists()) return null;
-  const obj = snap.val();
-  const id = Object.keys(obj)[0];
-  return { id, rec: obj[id] };
-}
+    if (!checkPw(req, res)) return;
 
-// ============ CORS helper ============
-function allowCORS(res) {
-  res.set("Access-Control-Allow-Origin", "*");
-  res.set("Access-Control-Allow-Methods", "GET,POST");
-  res.set("Access-Control-Allow-Headers", "Content-Type");
-}
-// ====================================
+    const type = req.query.type || "single";
+    const days = Number(req.query.days || 30);
+    const hwid = req.query.hwid || "*";
 
-
-// -------------------- generateKey --------------------
-exports.generateKey = onRequest(async (req, res) => {
-  allowCORS(res);
-
-  try {
-    const { pw, type, days, hwid } = req.query;
-    if (!pw || pw !== OWNER_PASS)
-      return res.status(401).json({ error: "Unauthorized" });
-
-    if (!["single", "global"].includes(type))
-      return res.status(400).json({ error: "Invalid type" });
-
-    const dur = Number(days);
-    if (![30,180,365].includes(dur))
-      return res.status(400).json({ error: "Invalid days" });
+    const id = Date.now().toString();
+    const key = "KEY-" + Math.random().toString(36).substring(2).toUpperCase();
 
     const issued = Date.now();
-    const payloadObj = { type, days: dur, hwid: hwid || "*", issued };
-    const payloadB64 = base64urlEncode(JSON.stringify(payloadObj));
-    const sig = signPayload(payloadB64);
-    const fullKey = `${payloadB64}.${sig}`;
-    const expires = issued + dur * 86400000;
+    const expires = issued + days * 86400000;
 
-    const db = getDatabase();
-    const ref = await db.ref("keys").push({
-      key: fullKey,
-      payload: payloadObj,
+    const payload = {
+      id,
+      key,
       type,
-      hwid: hwid || "*",
-      days: dur,
-      issued,
-      expires,
+      days,
+      hwid,
       paid: false,
       used: false,
       revoked: false,
-      createdAt: Date.now()
-    });
+      issued,
+      expires
+    };
 
-    return res.json({
-      ok: true,
-      id: ref.key,
-      key: fullKey,
-      payload: payloadObj
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "INTERNAL" });
-  }
+    await db.ref(`keys/${id}`).set(payload);
+
+    res.json({ ok: true, key, data: payload });
+  });
 });
 
+// ===================================================
+// 2. LIST KEYS
+// ===================================================
+exports.listKeys = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
 
-// -------------------- verifyKey --------------------
-exports.verifyKey = onRequest(async (req, res) => {
-  allowCORS(res);
+    if (!checkPw(req, res)) return;
 
-  try {
-    const { key, hwid } = req.query;
-    if (!key) return res.json({ valid:false, reason:"NO_KEY" });
+    const snap = await db.ref("keys").once("value");
+    const val = snap.val() || {};
 
-    const parts = key.split(".");
-    if (parts.length !== 2)
-      return res.json({ valid:false, reason:"BAD_FORMAT" });
+    res.json({ ok: true, keys: val });
+  });
+});
 
-    const [payloadB64, sig] = parts;
+// ===================================================
+// 3. MARK PAID
+// ===================================================
+exports.markPaid = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
 
-    const expected = signPayload(payloadB64);
-    if (sig !== expected)
-      return res.json({ valid:false, reason:"BAD_SIGNATURE" });
+    if (!checkPw(req, res)) return;
 
-    let payload;
-    try { payload = JSON.parse(base64urlDecode(payloadB64)); }
-    catch { return res.json({ valid:false, reason:"BAD_PAYLOAD" }); }
+    const id = req.query.id;
+    if (!id) return res.json({ ok: false, error: "Missing id" });
 
-    const db = getDatabase();
-    const found = await findRecordByKey(db, key);
-    if (!found)
-      return res.json({ valid:false, reason:"NOT_FOUND" });
+    await db.ref(`keys/${id}/paid`).set(true);
+    res.json({ ok: true, id });
+  });
+});
 
-    const rec = found.rec;
+// ===================================================
+// 4. MARK USED
+// ===================================================
+exports.markUsed = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
 
-    if (rec.revoked) return res.json({ valid:false, reason:"REVOKED" });
-    if (!rec.paid)  return res.json({ valid:false, reason:"UNPAID" });
+    if (!checkPw(req, res)) return;
 
-    const now = Date.now();
-    const expires = rec.expires;
-    if (now > expires)
-      return res.json({ valid:false, reason:"EXPIRED" });
+    const id = req.query.id;
+    if (!id) return res.json({ ok: false, error: "Missing id" });
 
-    if (
-      payload.type === "single" &&
-      payload.hwid !== "*" &&
-      hwid &&
-      payload.hwid !== hwid
-    ) {
-      return res.json({ valid:false, reason:"HWID_MISMATCH" });
+    await db.ref(`keys/${id}/used`).set(true);
+    res.json({ ok: true, id });
+  });
+});
+
+// ===================================================
+// 5. REVOKE KEY
+// ===================================================
+exports.revokeKey = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
+
+    if (!checkPw(req, res)) return;
+
+    const id = req.query.id;
+    if (!id) return res.json({ ok: false, error: "Missing id" });
+
+    await db.ref(`keys/${id}/revoked`).set(true);
+    res.json({ ok: true, id });
+  });
+});
+
+// ===================================================
+// 6. VERIFY KEY (untuk TAMperMonkey / client app)
+// ===================================================
+exports.verifyKey = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
+
+    const key = req.query.key;
+    const hwid = req.query.hwid;
+
+    if (!key || !hwid) return res.json({ ok: false, error: "Missing key/hwid" });
+
+    // cari berdasarkan key
+    const snap = await db.ref("keys").orderByChild("key").equalTo(key).once("value");
+    if (!snap.exists()) return res.json({ ok:false, error:"Key not found" });
+
+    const data = Object.values(snap.val())[0];
+
+    if (data.revoked) return res.json({ ok:false, error:"Key revoked" });
+    if (!data.paid) return res.json({ ok:false, error:"Key unpaid" });
+    if (Date.now() > data.expires) return res.json({ ok:false, error:"Key expired" });
+
+    // HWID check
+    if (data.hwid !== "*" && data.hwid !== hwid) {
+      return res.json({ ok:false, error:"HWID mismatch" });
     }
 
-    return res.json({
-      valid: true,
-      daysLeft: Math.ceil((expires - now) / 86400000),
-      payload,
-      id: found.id,
-      record: rec
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ valid:false, reason:"INTERNAL" });
-  }
+    res.json({ ok:true, valid:true, data });
+  });
 });
-
-
-// -------------------- listKeys (admin) --------------------
-exports.listKeys = onRequest(async (req, res) => {
-  allowCORS(res);
-
-  try {
-    const { pw } = req.query;
-    if (!pw || pw !== OWNER_PASS)
-      return res.status(401).json({ error:"Unauthorized" });
-
-    const snap = await getDatabase()
-      .ref("keys")
-      .orderByChild("createdAt")
-      .limitToLast(500)
-      .get();
-
-    return res.json({
-      ok: true,
-      keys: snap.exists() ? snap.val() : {}
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error:"INTERNAL" });
-  }
-});
-
-
-// -------------------- markPaid / markUsed / revokeKey --------------------
-async function adminUpdate(req, res, updateObj) {
-  allowCORS(res);
-
-  try {
-    const { pw, id } = req.query;
-    if (!pw || pw !== OWNER_PASS)
-      return res.status(401).json({ error:"Unauthorized" });
-
-    const db = getDatabase();
-    await db.ref(`keys/${id}`).update(updateObj);
-    const rec = (await db.ref(`keys/${id}`).get()).val();
-
-    return res.json({ ok:true, id, rec });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error:"INTERNAL" });
-  }
-}
-
-exports.markPaid  = onRequest((req,res)=> adminUpdate(req,res,{ paid:true,  paidAt:Date.now() }));
-exports.markUsed  = onRequest((req,res)=> adminUpdate(req,res,{ used:true,  usedAt:Date.now() }));
-exports.revokeKey = onRequest((req,res)=> adminUpdate(req,res,{ revoked:true,revokedAt:Date.now() }));
