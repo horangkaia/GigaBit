@@ -1,115 +1,117 @@
-<!DOCTYPE html>
-<html lang="id">
+<!doctype html>
+<html>
 <head>
-<meta charset="UTF-8">
-<title>AutoPCare Key Generator Admin</title>
-
+<meta charset="utf-8"/>
+<title>AutoPCare Admin</title>
 <style>
-    body {
-        background: #0e0e0e; 
-        color: #fff; 
-        font-family: Arial; 
-        padding: 40px;
-    }
-    .box {
-        background: rgba(255,255,255,0.07);
-        padding: 20px;
-        border-radius: 12px;
-        width: 420px;
-        margin: auto;
-        box-shadow: 0 0 20px rgba(0,0,0,0.4);
-    }
-    input, select, button {
-        width: 100%;
-        padding: 12px;
-        margin-top: 10px;
-        border-radius: 8px;
-        border: none;
-    }
-    button {
-        background: #27ae60;
-        color: #fff;
-        cursor: pointer;
-        font-weight: bold;
-    }
-    .danger { background: #c0392b; }
+  body{background:#0e0e0e;color:#fff;font-family:Arial;padding:24px}
+  .card{background:rgba(255,255,255,0.06);padding:14px;border-radius:10px;width:640px;margin:auto}
+  input,select,button{padding:10px;border-radius:8px;margin-top:8px;width:100%}
+  button{background:#27ae60;color:#fff;border:none;font-weight:700;cursor:pointer}
+  .muted{color:#9fb;font-size:13px;margin-top:8px}
+  table{width:100%;border-collapse:collapse;margin-top:12px}
+  th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px}
+  .danger{background:#c0392b}
 </style>
-
 </head>
 <body>
+<div class="card">
+  <h2>AutoPCare — Admin</h2>
 
-<div class="box">
-    <h2>AutoPCare Key Generator</h2>
+  <input id="pw" type="password" placeholder="Owner password (required)">
 
-    <input id="password" placeholder="Owner Password..." type="password">
+  <label>Tipe license</label>
+  <select id="type"><option value="single">single</option><option value="global">global</option></select>
 
-    <label>Tipe License</label>
-    <select id="type">
-        <option value="single">Single (HWID Lock)</option>
-        <option value="global">Global (No HWID Lock)</option>
-    </select>
+  <label>Durasi</label>
+  <select id="days"><option value="30">30 hari</option><option value="180">180 hari</option><option value="365">365 hari</option></select>
 
-    <label>Durasi License</label>
-    <select id="days">
-        <option value="30">1 Bulan (30 hari)</option>
-        <option value="180">6 Bulan (180 hari)</option>
-        <option value="365">1 Tahun (365 hari)</option>
-    </select>
+  <label>HWID (opsional)</label>
+  <input id="hwid" placeholder="Isi untuk single (atau kosong -> *)">
 
-    <label>HWID (opsional)</label>
-    <input id="hwid" placeholder="Kosong = otomatis">
+  <button id="btnGen">Generate Key</button>
+  <pre id="out" style="white-space:pre-wrap;margin-top:10px"></pre>
 
-    <button onclick="generateKey()">Generate Key</button>
+  <hr style="opacity:0.06;margin-top:12px"/>
 
-    <div id="output" style="margin-top:20px; white-space: pre-wrap;"></div>
+  <div style="display:flex;gap:8px">
+    <button id="btnList" style="flex:1">List Keys</button>
+    <button id="btnRefresh" style="flex:1">Refresh</button>
+  </div>
 
-    <button class="danger" onclick="sendWA()">Kirim ke WhatsApp</button>
+  <div id="tableWrap"></div>
+  <div class="muted">Semua permintaan admin dikirim ke Cloud Function yang aman (server-side checks).</div>
 </div>
 
-
-<!-- FIREBASE SDK -->
 <script>
-const VERIFY_URL = "https://asia-southeast2-schesakra.cloudfunctions.net/verifyKey";
-const GENERATE_URL = "https://asia-southeast2-schesakra.cloudfunctions.net/generateKey";
+  const REGION_URL = "https://asia-southeast2-schesakra.cloudfunctions.net"; // ganti sesuai region/project
+  const ENDPOINTS = {
+    generate: REGION_URL + "/generateKey",
+    list: REGION_URL + "/listKeys",
+    markPaid: REGION_URL + "/markPaid",
+    markUsed: REGION_URL + "/markUsed",
+    revoke: REGION_URL + "/revokeKey",
+    verify: REGION_URL + "/verifyKey"
+  };
 
-let lastKey = "";
-
-async function generateKey() {
-
-    const password = document.getElementById("password").value.trim();
-    const type = document.getElementById("type").value;
-    const days = Number(document.getElementById("days").value);
-    const hwid = document.getElementById("hwid").value.trim() || "*";
-
-    const url = `${GENERATE_URL}?pw=${encodeURIComponent(password)}&type=${type}&days=${days}&hwid=${encodeURIComponent(hwid)}`;
-
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (data.error) {
-        document.getElementById("output").textContent = "ERROR: " + data.error;
-        return;
+  const $ = id => document.getElementById(id);
+  $('btnGen').addEventListener('click', async ()=>{
+    const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
+    const type = $('type').value; const days = $('days').value; const hwid = $('hwid').value || '*';
+    const url = `${ENDPOINTS.generate}?pw=${encodeURIComponent(pw)}&type=${encodeURIComponent(type)}&days=${days}&hwid=${encodeURIComponent(hwid)}`;
+    const r = await fetch(url); const j = await r.json();
+    $('out').textContent = JSON.stringify(j, null, 2);
+    if (j && j.key) { // auto copy
+      try { await navigator.clipboard.writeText(j.key); $('out').textContent += "\\n\n(KEY copied to clipboard)"; } catch(e){}
     }
+  });
 
-    lastKey = data.key;
+  $('btnList').addEventListener('click', listKeys);
+  $('btnRefresh').addEventListener('click', listKeys);
 
-    document.getElementById("output").textContent =
-        "=== KEY BERHASIL DIBUAT ===\n\n" +
-        "KEY:\n" + data.key + "\n\n" +
-        "PAYLOAD:\n" + JSON.stringify(data.payload, null, 2);
-}
+  async function listKeys(){
+    const pw = $('pw').value.trim(); if(!pw) return alert('Masukkan password');
+    const url = `${ENDPOINTS.list}?pw=${encodeURIComponent(pw)}`;
+    const r = await fetch(url); const j = await r.json();
+    if (!j.ok) { $('out').textContent = JSON.stringify(j,null,2); return; }
+    const keys = j.keys;
+    const rows = Object.keys(keys||{}).reverse().map(id=>{
+      const k = keys[id];
+      return `<tr>
+        <td style="word-break:break-all">${id}</td>
+        <td style="word-break:break-all">${k.key||''}</td>
+        <td>${k.type||''}/${k.days||''}</td>
+        <td>${k.paid?'<b style="color:#6fb">PAID</b>':'<b style="color:#fb6">UNPAID</b>'}</td>
+        <td>${k.used?'<span style="color:#6fb">USED</span>':'-'}</td>
+        <td>${k.revoked?'<span style="color:#f66">REVOKED</span>':'-'}</td>
+        <td>
+          <button data-id="${id}" class="btnPaid">Mark Paid</button>
+          <button data-id="${id}" class="btnUsed">Mark Used</button>
+          <button data-id="${id}" class="btnRevoke danger">Revoke</button>
+        </td>
+      </tr>`;
+    }).join('');
+    $('tableWrap').innerHTML = `<table><thead><tr><th>ID</th><th>KEY</th><th>TYPE/DAYS</th><th>PAID</th><th>USED</th><th>REVOKED</th><th>ACTION</th></tr></thead><tbody>${rows}</tbody></table>`;
 
-
-function sendWA() {
-    if (!lastKey) return alert("Generate key dulu");
-
-    const msg = `Halo, ini KEY AutoPCare Anda:\n\n${lastKey}`;
-    const url = "https://wa.me/62816772145?text=" + encodeURIComponent(msg);
-
-    window.open(url, "_blank");
-}
+    document.querySelectorAll('.btnPaid').forEach(b=> b.addEventListener('click', async e=>{
+      const id = e.currentTarget.dataset.id; if(!confirm('Mark paid?')) return;
+      const pw = $('pw').value.trim();
+      const url = `${ENDPOINTS.markPaid}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
+      const r = await fetch(url); const j = await r.json(); alert(JSON.stringify(j,null,2)); listKeys();
+    }));
+    document.querySelectorAll('.btnUsed').forEach(b=> b.addEventListener('click', async e=>{
+      const id = e.currentTarget.dataset.id; if(!confirm('Mark used?')) return;
+      const pw = $('pw').value.trim();
+      const url = `${ENDPOINTS.markUsed}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
+      const r = await fetch(url); const j = await r.json(); alert(JSON.stringify(j,null,2)); listKeys();
+    }));
+    document.querySelectorAll('.btnRevoke').forEach(b=> b.addEventListener('click', async e=>{
+      const id = e.currentTarget.dataset.id; if(!confirm('Revoke key?')) return;
+      const pw = $('pw').value.trim();
+      const url = `${ENDPOINTS.revoke}?pw=${encodeURIComponent(pw)}&id=${encodeURIComponent(id)}`;
+      const r = await fetch(url); const j = await r.json(); alert(JSON.stringify(j,null,2)); listKeys();
+    }));
+  }
 </script>
-
-
 </body>
 </html>
