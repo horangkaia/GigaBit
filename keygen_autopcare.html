@@ -68,56 +68,48 @@
 
 
 <!-- FIREBASE SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js"></script>
-
 <script>
-    // ======================
-    //  Firebase Config
-    // ======================
-    const firebaseConfig = {
-        apiKey: "AIzaSyBk57WWCAV9PbUQBb_bj7mPtl09oNz7WnA",
-        authDomain: "schesakra.firebaseapp.com",
-        databaseURL: "https://schesakra-default-rtdb.asia-southeast1.firebasedatabase.app",
-        projectId: "schesakra",
-        storageBucket: "schesakra.firebasestorage.app",
-        messagingSenderId: "672537227977",
-        appId: "1:672537227977:web:88b24f905c86eba7c05318",
-        measurementId: "G-Q7HSM1LK98"
-    };
+const VERIFY_URL = "https://asia-southeast2-schesakra.cloudfunctions.net/verifyKey";
+const GENERATE_URL = "https://asia-southeast2-schesakra.cloudfunctions.net/generateKey";
 
-    firebase.initializeApp(firebaseConfig);
-    const functions = firebase.functions();
+let lastKey = "";
 
-    let lastKey = "";
+async function generateKey() {
 
-    async function generateKey() {
-        const password = document.getElementById("password").value.trim();
-        const type = document.getElementById("type").value;
-        const days = Number(document.getElementById("days").value);
-        const hwid = document.getElementById("hwid").value.trim() || "*";
+    const password = document.getElementById("password").value.trim();
+    const type = document.getElementById("type").value;
+    const days = Number(document.getElementById("days").value);
+    const hwid = document.getElementById("hwid").value.trim() || "*";
 
-        const cf = functions.httpsCallable("generateKey");
+    const url = `${GENERATE_URL}?pw=${encodeURIComponent(password)}&type=${type}&days=${days}&hwid=${encodeURIComponent(hwid)}`;
 
-        const res = await cf({ password, type, days, hwid });
+    const res = await fetch(url);
+    const data = await res.json();
 
-        lastKey = res.data.key;
-
-        document.getElementById("output").textContent =
-            "=== KEY BERHASIL DIBUAT ===\n\n" +
-            "KEY:\n" + res.data.key + "\n\n" +
-            "PAYLOAD:\n" + JSON.stringify(res.data.payload, null, 2);
+    if (data.error) {
+        document.getElementById("output").textContent = "ERROR: " + data.error;
+        return;
     }
 
-    function sendWA() {
-        if (!lastKey) return alert("Generate key dulu");
+    lastKey = data.key;
 
-        const msg = `Halo, ini KEY AutoPCare Anda:\n\n${lastKey}`;
-        const url = "https://wa.me/62816772145?text=" + encodeURIComponent(msg);
+    document.getElementById("output").textContent =
+        "=== KEY BERHASIL DIBUAT ===\n\n" +
+        "KEY:\n" + data.key + "\n\n" +
+        "PAYLOAD:\n" + JSON.stringify(data.payload, null, 2);
+}
 
-        window.open(url, "_blank");
-    }
+
+function sendWA() {
+    if (!lastKey) return alert("Generate key dulu");
+
+    const msg = `Halo, ini KEY AutoPCare Anda:\n\n${lastKey}`;
+    const url = "https://wa.me/62816772145?text=" + encodeURIComponent(msg);
+
+    window.open(url, "_blank");
+}
 </script>
+
 
 </body>
 </html>
